@@ -1,5 +1,10 @@
 import GPy
 import numpy as np
+import torch 
+import torch.nn as nn 
+import tqdm
+from itertools import chain 
+from abc import ABCMeta, abstractmethod 
 
 class KernelFunction:
     """
@@ -88,3 +93,131 @@ def generate_gp_data(kernel_fn: KernelFunction, input_dim=1, n_points=50, noise_
     Y = gp.posterior_samples_f(X, full_cov=True, size=1).reshape(-1, 1) # sampling from the prior
     Y += np.random.normal(0, np.sqrt(noise_var), size=Y.shape) # adding noise to the samples
     return X, Y, str(kernel_fn)
+
+
+class Environment(metaclass=ABCMeta):
+
+    def __init__(self, batch_size: int, max_trajectory_length: int, log_reward: nn.Module):
+        self.batch_size = batch_size
+        self.max_trajectory_length = max_trajectory_length
+        self.batch_ids = torch.arange(self.batch_size)
+        self.stopped = torch.zeros((self.batch_size))
+        self.is_initial = torch.ones((self.batch_size,))
+        self._log_reward = log_reward
+
+    @abstractmethod
+    def apply(self, actions: torch.Tensor):
+        pass
+
+    @abstractmethod
+    def backward(self, actions: torch.Tensor):
+        pass
+
+    @torch.no_grad()
+    def log_reward(self):
+        return self._log_reward(self)
+
+class KernelEnvironment(Environment):
+    """
+    An Environment for sequentially constructing a composite kernel function.
+
+    The state is the currently constructed kernel. Actions involve adding or 
+    multiplying by a base kernel, or terminating the sequence.
+    """
+    def __init__(self, batch_size: int, max_trajectory_length: int, log_reward: nn.Module):
+        super().__init__(batch_size, max_trajectory_length, log_reward)
+
+        # Define the action space
+        self.base_kernel_names = ["RBF", "Linear", "Periodic", "Matern32"]
+        self.operations = ["add", "multiply"]
+        self.action_space_size = len(self.base_kernel_names) * len(self.operations) + 1
+        self.end_action_id = self.action_space_size - 1
+
+        # A mapping from action ID to (operation, kernel_name)
+        self.action_map = {}
+        idx = 0
+        for op in self.operations:
+            for name in self.base_kernel_names:
+                self.action_map[idx] = (op, name)
+                idx += 1
+        self.action_map[self.end_action_id] = ("end", None)
+
+        # Helper to create new base kernel instances
+        self.kernel_creators = {
+            "RBF": KernelFunction().rbf,
+            "Linear": KernelFunction().linear,
+            "Periodic": KernelFunction().periodic,
+            "Matern32": KernelFunction().matern32,
+        }
+
+        # Initialize state and history
+        self.state = [KernelFunction() for _ in range(self.batch_size)]
+        self.history = [[] for _ in range(self.batch_size)]
+        self.update_masks()
+
+    @torch.no_grad()
+    def apply(self, actions: torch.Tensor):
+        """Applies an action to each kernel in the batch."""
+        for i in range(self.batch_size):
+            if self.stopped[i]:
+                continue
+
+            action_id = actions[i].item()
+            self.history[i].append(action_id)
+
+            # Stop if max length reached or end action is taken
+            if len(self.history[i]) >= self.max_trajectory_length or action_id == self.end_action_id:
+                self.stopped[i] = True
+                continue
+
+            # Apply the kernel-modifying action
+            op, k_name = self.action_map[action_id]
+            current_kernel = self.state[i]
+            new_base_kernel = self.kernel_creators[k_name]()
+
+            if op == "add":
+                self.state[i] = current_kernel.add(new_base_kernel)
+            elif op == "multiply":
+                self.state[i] = current_kernel.multiply(new_base_kernel)
+
+        self.is_initial = torch.tensor([len(h) == 0 for h in self.history], dtype=torch.bool)
+        self.update_masks()
+        
+        # CORRECTED LINE: Cast to boolean before inverting
+        return ~self.stopped.bool()
+
+    @torch.no_grad()
+    def backward(self, actions: torch.Tensor = None):
+        """Reverts the last action for each kernel in the batch."""
+        undone_actions = torch.zeros(self.batch_size, dtype=torch.long)
+        
+        for i in range(self.batch_size):
+            if self.is_initial[i]:
+                continue
+
+            # Retrieve and remove the last action from history
+            last_action_id = self.history[i].pop()
+            undone_actions[i] = last_action_id
+            
+            # If the state was previously stopped, un-stop it
+            if self.stopped[i]:
+                self.stopped[i] = False
+            # Otherwise, revert the kernel structure
+            elif last_action_id != self.end_action_id:
+                # The previous state is the first child of the current composite kernel
+                self.state[i] = self.state[i].children[0]
+
+        self.is_initial = torch.tensor([len(h) == 0 for h in self.history], dtype=torch.bool)
+        self.update_masks()
+        return undone_actions
+
+    def update_masks(self):
+        """Updates action masks based on the current state."""
+        self.mask = torch.ones((self.batch_size, self.action_space_size), dtype=torch.bool)
+        for i in range(self.batch_size):
+            # If a trajectory is stopped, mask all actions
+            if self.stopped[i]:
+                self.mask[i, :] = False
+            # The 'end' action is only allowed if the kernel is not in its initial state
+            if self.is_initial[i]:
+                self.mask[i, self.end_action_id] = False
