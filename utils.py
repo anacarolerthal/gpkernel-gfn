@@ -50,9 +50,9 @@ class KernelFunction:
             # Create kernel first, then set bounds
             kernel = GPy.kern.StdPeriodic(input_dim, **self.hyperparams)
             # Set bounds after creation
-            kernel.period.constrain_bounded(1e-1, 10)
-            kernel.lengthscale.constrain_bounded(1e-1, 10) 
-            kernel.variance.constrain_bounded(1e-2, 10)
+            kernel.period.constrain_bounded(1e-1, 10, warning=False)
+            kernel.lengthscale.constrain_bounded(1e-1, 10, warning=False) 
+            kernel.variance.constrain_bounded(1e-2, 10, warning=False)
             return kernel
         elif self.name == "RQ":
             return GPy.kern.RatQuad(input_dim, **self.hyperparams)
