@@ -7,6 +7,8 @@ import tqdm
 from itertools import chain 
 from abc import ABCMeta, abstractmethod 
 
+_likelihood_cache = {}
+
 class KernelFunction:
     """
     Represents a kernel function (using GPy)
@@ -27,11 +29,11 @@ class KernelFunction:
     def linear(self, variances=1.0):
         return KernelFunction("Linear", hyperparams={"variances": variances})
 
-    def periodic(self, period=1.0, variance=1.0):
-        return KernelFunction("Periodic", hyperparams={"period": period, "variance": variance})
+    def periodic(self, period=1.0, variance=1.0, lengthscale=1.0):
+        return KernelFunction("Periodic", hyperparams={"period": period, "variance": variance, "lengthscale": lengthscale})
 
-    def matern32(self, lengthscale=1.0, variance=1.0):
-        return KernelFunction("Matern32", hyperparams={"lengthscale": lengthscale, "variance": variance})
+    def rq(self, lengthscale=1.0, variance=1.0):
+        return KernelFunction("RQ", hyperparams={"lengthscale": lengthscale, "variance": variance})
 
     def add(self, other):
         return KernelFunction("Sum", children=[self, other])
@@ -45,9 +47,15 @@ class KernelFunction:
         elif self.name == "Linear":
             return GPy.kern.Linear(input_dim, **self.hyperparams)
         elif self.name == "Periodic":
-            return GPy.kern.StdPeriodic(input_dim, **self.hyperparams)
-        elif self.name == "Matern32":
-            return GPy.kern.Matern32(input_dim, **self.hyperparams)
+            # Create kernel first, then set bounds
+            kernel = GPy.kern.StdPeriodic(input_dim, **self.hyperparams)
+            # Set bounds after creation
+            kernel.period.constrain_bounded(1e-1, 10)
+            kernel.lengthscale.constrain_bounded(1e-1, 10) 
+            kernel.variance.constrain_bounded(1e-2, 10)
+            return kernel
+        elif self.name == "RQ":
+            return GPy.kern.RatQuad(input_dim, **self.hyperparams)
         elif self.name == "Sum":
             result = self.children[0].evaluate(input_dim)
             for child in self.children[1:]:
@@ -75,7 +83,7 @@ def generate_gp_data(kernel_fn: KernelFunction, input_dim=1, n_points=50, noise_
     """
     Generates synthetic data from a Gaussian Process prior with the specified kernel function for evaluation
     
-    Parameters:
+    Args:
         kernel_fn: KernelFunction object
         input_dim: dimensionality of the input space
         n_points: number of data points
@@ -95,6 +103,32 @@ def generate_gp_data(kernel_fn: KernelFunction, input_dim=1, n_points=50, noise_
     Y += np.random.normal(0, np.sqrt(noise_var), size=Y.shape) # adding noise to the samples
     return X, Y, str(kernel_fn)
 
+
+def evaluate_likelihood(kernel_fn: KernelFunction, X, Y):
+    """
+    Fits a GP model with the given kernel to the provided data and returns the log marginal likelihood
+    
+    Args:
+        kernel_fn (KernelFunction): kernel
+        X (np.ndarray): Input data of shape (n_points, input_dim)
+        Y (np.ndarray): Target data of shape (n_points, 1)
+    
+    Returns:
+        float: Log marginal likelihood of the GP with this kernel on the data.
+    """
+    key = str(kernel_fn)
+
+    if key in _likelihood_cache:
+        return _likelihood_cache[key]
+
+    input_dim = X.shape[1]
+    kernel = kernel_fn.evaluate(input_dim=input_dim)
+    model = GPy.models.GPRegression(X, Y, kernel, normalizer=False)
+    model.optimize(max_iters=10, messages=False)
+
+    ll = model.log_likelihood()
+    _likelihood_cache[key] = ll
+    return ll
 
 class Environment(metaclass=ABCMeta):
 
@@ -129,7 +163,7 @@ class KernelEnvironment(Environment):
         super().__init__(batch_size, max_trajectory_length, log_reward)
 
         # Define the action space
-        self.base_kernel_names = ["RBF", "Linear", "Periodic", "Matern32"]
+        self.base_kernel_names = ["RBF", "Linear", "Periodic", "RQ"]
         self.operations = ["add", "multiply"]
         self.action_space_size = len(self.base_kernel_names) * len(self.operations) + 1
         self.end_action_id = self.action_space_size - 1
@@ -148,7 +182,7 @@ class KernelEnvironment(Environment):
             "RBF": KernelFunction().rbf,
             "Linear": KernelFunction().linear,
             "Periodic": KernelFunction().periodic,
-            "Matern32": KernelFunction().matern32,
+            "RQ": KernelFunction().rq,
         }
 
         # Initialize state and history
