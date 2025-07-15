@@ -1,4 +1,5 @@
 import GPy
+import matplotlib.pyplot as plt
 import numpy as np
 import torch 
 import torch.nn as nn 
@@ -221,3 +222,174 @@ class KernelEnvironment(Environment):
             # The 'end' action is only allowed if the kernel is not in its initial state
             if self.is_initial[i]:
                 self.mask[i, self.end_action_id] = False
+
+
+def plot_kernel_function(kernel_fn, x_range=(0, 10), num_points=100, num_samples=5, 
+                        input_dim=1, title=None, figsize=(12, 8)):
+    """
+    Visualize a kernel function by plotting samples from its GP prior and covariance.
+    
+    Parameters:
+    -----------
+    kernel_fn : KernelFunction
+        The kernel function to visualize
+    x_range : tuple
+        Range of x values as (min, max). Default is (0, 10)
+    num_points : int
+        Number of points for evaluation. Default is 100
+    num_samples : int
+        Number of function samples to draw from GP prior. Default is 5
+    input_dim : int
+        Input dimensionality. Default is 1
+    title : str
+        Custom title for the plot. If None, uses kernel string representation
+    figsize : tuple
+        Figure size as (width, height). Default is (12, 8)
+    
+    Example:
+    --------
+    k = KernelFunction()
+    k1 = k.rbf(lengthscale=1.0)
+    k2 = k.linear(variances=0.5)
+    k3 = k1.add(k2).multiply(k.linear(variances=2.0))
+    plot_kernel_function(k3)
+    """
+    
+    try:
+        # Create evaluation points
+        X = np.linspace(x_range[0], x_range[1], num_points)[:, None]
+        
+        # Get the GPy kernel
+        gpy_kernel = kernel_fn.evaluate(input_dim=input_dim)
+        
+        # Compute kernel matrix
+        K = gpy_kernel.K(X, X) # covariance matrix for all pairs of points
+        
+        # Add small noise for numerical stability
+        K_stable = K + 1e-6 * np.eye(len(X)) # ensure positive definiteness for cholesky decomposition
+        
+        # Sample functions from the GP prior
+        L = np.linalg.cholesky(K_stable) # K = L @ L.T
+        samples = []
+        for _ in range(num_samples):
+            u = np.random.standard_normal(len(X)) # u ~ N(0, I)
+            sample = L @ u # f ~ N(0, K)
+            samples.append(sample)
+        
+        # Create subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+        
+        # Plot 1: Function samples from GP prior
+        ax1.set_title('Function Samples from GP Prior', fontsize=14)
+        for i, sample in enumerate(samples):
+            ax1.plot(X.flatten(), sample, alpha=0.7, linewidth=2, 
+                    label=f'Sample {i+1}' if i < 3 else "")
+        
+        ax1.set_xlabel('x', fontsize=12)
+        ax1.set_ylabel('f(x)', fontsize=12)
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        # Plot 2: Kernel covariance heatmap
+        im = ax2.imshow(K, cmap='viridis', extent=[x_range[0], x_range[1], x_range[1], x_range[0]])
+        ax2.set_title('Kernel Covariance Matrix', fontsize=14)
+        ax2.set_xlabel('x', fontsize=12)
+        ax2.set_ylabel('x', fontsize=12)
+        
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax2)
+        cbar.set_label('Covariance', fontsize=12)
+        
+        # Set overall title
+        if title:
+            fig.suptitle(title, fontsize=16, y=1.02)
+        else:
+            fig.suptitle(f'Kernel Visualization: {str(kernel_fn)}', fontsize=16, y=1.02)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Print kernel info
+        print(f"Kernel: {str(kernel_fn)}")
+        print(f"Kernel matrix shape: {K.shape}")
+        print(f"Kernel matrix condition number: {np.linalg.cond(K):.2e}")
+        
+    except Exception as e:
+        print(f"Error visualizing kernel: {e}")
+        print("Make sure your kernel function is properly defined.")
+
+
+def compare_kernels(*kernel_fns, x_range=(0, 10), num_points=100, num_samples=3, figsize=(15, 10)):
+    """
+    Compare multiple kernel functions side by side.
+    
+    Parameters:
+    -----------
+    *kernel_fns : KernelFunction objects
+        Variable number of kernel functions to compare
+    x_range : tuple
+        Range of x values as (min, max)
+    num_points : int
+        Number of points for evaluation
+    num_samples : int
+        Number of function samples per kernel
+    figsize : tuple
+        Figure size
+    
+    Example:
+    --------
+    k = KernelFunction()
+    k1 = k.rbf(lengthscale=1.0)
+    k2 = k.linear(variances=0.5)
+    k3 = k1.add(k2)
+    compare_kernels(k1, k2, k3)
+    """
+    
+    n_kernels = len(kernel_fns)
+    if n_kernels == 0:
+        print("No kernels provided!")
+        return
+    
+    fig, axes = plt.subplots(2, n_kernels, figsize=figsize)
+    if n_kernels == 1:
+        axes = axes.reshape(2, 1)
+    
+    X = np.linspace(x_range[0], x_range[1], num_points)[:, None]
+    
+    for i, kernel_fn in enumerate(kernel_fns):
+        try:
+            # Get GPy kernel and compute covariance
+            gpy_kernel = kernel_fn.evaluate(input_dim=1)
+            K = gpy_kernel.K(X, X)
+            K_stable = K + 1e-6 * np.eye(len(X))
+            
+            # Sample functions
+            L = np.linalg.cholesky(K_stable)
+            samples = []
+            for _ in range(num_samples):
+                u = np.random.standard_normal(len(X))
+                sample = L @ u
+                samples.append(sample)
+            
+            # Plot samples
+            ax_samples = axes[0, i]
+            for j, sample in enumerate(samples):
+                ax_samples.plot(X.flatten(), sample, alpha=0.7, linewidth=2)
+            
+            ax_samples.set_title(f'Samples: {str(kernel_fn)[:30]}...', fontsize=10)
+            ax_samples.set_xlabel('x')
+            ax_samples.set_ylabel('f(x)')
+            ax_samples.grid(True, alpha=0.3)
+            
+            # Plot covariance
+            ax_cov = axes[1, i]
+            im = ax_cov.imshow(K, cmap='viridis', extent=[x_range[0], x_range[1], x_range[1], x_range[0]])
+            ax_cov.set_title(f'Covariance Matrix', fontsize=10)
+            ax_cov.set_xlabel('x')
+            ax_cov.set_ylabel('x')
+            
+        except Exception as e:
+            print(f"Error with kernel {i}: {e}")
+    
+    plt.tight_layout()
+    plt.show()
