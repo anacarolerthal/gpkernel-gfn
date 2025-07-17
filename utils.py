@@ -31,9 +31,6 @@ class KernelFunction:
 
     def periodic(self, period=1.0, variance=1.0, lengthscale=1.0):
         return KernelFunction("Periodic", hyperparams={"period": period, "variance": variance, "lengthscale": lengthscale})
-
-    def rq(self, lengthscale=1.0, variance=1.0):
-        return KernelFunction("RQ", hyperparams={"lengthscale": lengthscale, "variance": variance})
     
     def white_noise(self, variance=1.0):
         return KernelFunction("WhiteNoise", hyperparams={"variance": variance})
@@ -68,8 +65,6 @@ class KernelFunction:
             kernel.lengthscale.constrain_bounded(1e-1, 10, warning=False) 
             kernel.variance.constrain_bounded(1e-2, 10, warning=False)
             return kernel
-        elif self.name == "RQ":
-            return GPy.kern.RatQuad(input_dim, **self.hyperparams)
         elif self.name == "WhiteNoise":
             return GPy.kern.White(input_dim, **self.hyperparams)
         elif self.name == "Constant":
@@ -88,6 +83,17 @@ class KernelFunction:
             raise ValueError("Cannot evaluate empty kernel, perform operation")
         else:
             raise ValueError(f"Unknown kernel type: {self.name}")
+        
+    def num_params(self):
+        """
+        Returns the number of hyperparameters in this kernel function.
+        """
+        if self.name is None:
+            return 0
+        elif self.name in ["Sum", "Product"]:
+            return sum(child.num_params() for child in self.children)
+        else:
+            return len(self.hyperparams)
 
     def __str__(self):
         if self.name in ["Sum", "Product"]:
@@ -182,7 +188,7 @@ class KernelEnvironment(Environment):
         super().__init__(batch_size, max_trajectory_length, log_reward)
 
         # Define the action space
-        self.base_kernel_names = ["RBF", "Linear", "Periodic", "RQ", "WhiteNoise", "Constant"]
+        self.base_kernel_names = ["RBF", "Linear", "Periodic", "WhiteNoise", "Constant"]
         self.operations = ["add", "multiply"]
         self.action_space_size = len(self.base_kernel_names) * len(self.operations) + 1
         self.end_action_id = self.action_space_size - 1
@@ -201,7 +207,6 @@ class KernelEnvironment(Environment):
             "RBF": KernelFunction().rbf,
             "Linear": KernelFunction().linear,
             "Periodic": KernelFunction().periodic,
-            "RQ": KernelFunction().rq,
             "WhiteNoise": KernelFunction().white_noise,
             "Constant": KernelFunction().constant
         }
