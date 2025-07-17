@@ -9,6 +9,7 @@ from abc import ABCMeta, abstractmethod
 from torch.distributions import Categorical
 _likelihood_cache = {}
 
+
 class KernelFunction:
     """
     Represents a kernel function (using GPy)
@@ -32,8 +33,8 @@ class KernelFunction:
     def periodic(self, period=1.0, variance=1.0, lengthscale=1.0):
         return KernelFunction("Periodic", hyperparams={"period": period, "variance": variance, "lengthscale": lengthscale})
     
-    def white_noise(self, variance=1.0):
-        return KernelFunction("WhiteNoise", hyperparams={"variance": variance})
+    # def white_noise(self, variance=1.0):
+    #     return KernelFunction("WhiteNoise", hyperparams={"variance": variance})
     
     def constant(self, variance=1.0):
         return KernelFunction("Constant", hyperparams={"variance": variance})
@@ -65,8 +66,8 @@ class KernelFunction:
             kernel.lengthscale.constrain_bounded(1e-1, 10, warning=False) 
             kernel.variance.constrain_bounded(1e-2, 10, warning=False)
             return kernel
-        elif self.name == "WhiteNoise":
-            return GPy.kern.White(input_dim, **self.hyperparams)
+        # elif self.name == "WhiteNoise":
+        #     return GPy.kern.White(input_dim, **self.hyperparams)
         elif self.name == "Constant":
             return GPy.kern.Bias(input_dim, **self.hyperparams)
         elif self.name == "Sum":
@@ -141,9 +142,12 @@ def evaluate_likelihood(kernel_fn: KernelFunction, X, Y, runtime=True):
         float: Log marginal likelihood of the GP with this kernel on the data.
     """
     key = str(kernel_fn)
+    
+
 
     if key in _likelihood_cache and runtime:
         return _likelihood_cache[key]
+
 
     input_dim = X.shape[1]
     kernel = kernel_fn.evaluate(input_dim=input_dim)
@@ -188,7 +192,7 @@ class KernelEnvironment(Environment):
         super().__init__(batch_size, max_trajectory_length, log_reward)
 
         # Define the action space
-        self.base_kernel_names = ["RBF", "Linear", "Periodic", "WhiteNoise", "Constant"]
+        self.base_kernel_names = ["RBF", "Linear", "Periodic",  "Constant"]#"WhiteNoise",
         self.operations = ["add", "multiply"]
         self.action_space_size = len(self.base_kernel_names) * len(self.operations) + 1
         self.end_action_id = self.action_space_size - 1
@@ -207,7 +211,7 @@ class KernelEnvironment(Environment):
             "RBF": KernelFunction().rbf,
             "Linear": KernelFunction().linear,
             "Periodic": KernelFunction().periodic,
-            "WhiteNoise": KernelFunction().white_noise,
+            #"WhiteNoise": KernelFunction().white_noise,
             "Constant": KernelFunction().constant
         }
 
@@ -280,8 +284,11 @@ class KernelEnvironment(Environment):
             if self.stopped[i]:
                 self.mask[i, :] = False
             # The 'end' action is only allowed if the kernel is not in its initial state
+            # Also cant multiply by a kernel if the current state is initial
             if self.is_initial[i]:
                 self.mask[i, self.end_action_id] = False
+                for j in range(len(self.base_kernel_names)):
+                    self.mask[i, j + len(self.operations)] = False
 
     def featurize_state(self):
         """
