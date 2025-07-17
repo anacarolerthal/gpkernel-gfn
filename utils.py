@@ -83,6 +83,17 @@ class KernelFunction:
             raise ValueError("Cannot evaluate empty kernel, perform operation")
         else:
             raise ValueError(f"Unknown kernel type: {self.name}")
+        
+    def num_params(self):
+        """
+        Returns the number of hyperparameters in this kernel function.
+        """
+        if self.name is None:
+            return 0
+        elif self.name in ["Sum", "Product"]:
+            return sum(child.num_params() for child in self.children)
+        else:
+            return len(self.hyperparams)
 
     def __str__(self):
         if self.name in ["Sum", "Product"]:
