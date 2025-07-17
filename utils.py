@@ -6,7 +6,7 @@ import torch.nn as nn
 import tqdm
 from itertools import chain 
 from abc import ABCMeta, abstractmethod 
-
+from torch.distributions import Categorical
 _likelihood_cache = {}
 
 class KernelFunction:
@@ -509,3 +509,68 @@ def train(gflownet, create_env, epochs, batch_size, lr=1e-3,
         losses.append(loss.item()) 
 
     return gflownet, losses  
+
+
+class ForwardPolicy(nn.Module):
+    """
+    A simple MLP that takes a featurized state and outputs action logits
+    and the state flow value log F(s).
+    """
+    def __init__(self, input_dim, output_dim,epsilon=0.1):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, output_dim + 1) # +1 for the state flow log F(s)
+        )
+
+        self.epsilon = epsilon  # Exploration rate for epsilon-greedy sampling
+
+    def forward(self, batch_state, actions=None):
+        
+        
+        features = batch_state.featurize_state()
+        policy = self.net(features)
+
+        epsilon = 0. if not self.training else self.epsilon
+        #print(epsilon)
+        unif_policy = torch.ones_like(policy) / policy.size(1)
+
+        output = policy * (1 - epsilon) + epsilon * unif_policy
+        
+        logits, state_flow = output[:, :-1], output[:, -1]
+        
+        # Apply the environment's mask
+        logits[~batch_state.mask] = -torch.inf
+        
+        # Find rows where all actions were masked (all logits are -inf)
+        all_masked_rows = torch.all(torch.isneginf(logits), dim=1)
+        # For those rows, set the first logit to 0.0 to prevent invalid dist
+        # This allows sampling an action that will be ignored 
+        if all_masked_rows.any():
+            logits[all_masked_rows, 0] = 0.0
+
+        if actions is None:
+            dist = Categorical(logits=logits)
+            actions = dist.sample()
+            log_probs = dist.log_prob(actions)
+        else:
+            log_probs = Categorical(logits=logits).log_prob(actions)
+            
+        return actions, log_probs.squeeze(), state_flow.squeeze()
+
+
+
+class BackwardPolicy:
+    """
+    A trivial backward policy for deterministic environments.
+    It returns a log-probability of 0, corresponding to a true probability of 1.
+    """
+    def __call__(self, batch_state, actions):
+        batch_size = batch_state.batch_size
+        log_probs = torch.zeros(batch_size)
+        
+
+        return None, log_probs
