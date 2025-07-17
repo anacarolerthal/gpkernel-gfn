@@ -18,7 +18,7 @@ class KernelFunction:
         hyperparams (dict): Hyperparameter of the kernel function
         children (list): List of child kernel functions for composite kernels (Sum is a node that has two children, recursively)
     """
-    def __init__(self, name="Identity", hyperparams=None, children=None):
+    def __init__(self, name=None, hyperparams=None, children=None):
         self.name = name
         self.hyperparams = hyperparams or {}
         self.children = children or []
@@ -34,13 +34,27 @@ class KernelFunction:
 
     def rq(self, lengthscale=1.0, variance=1.0):
         return KernelFunction("RQ", hyperparams={"lengthscale": lengthscale, "variance": variance})
+    
+    def white_noise(self, variance=1.0):
+        return KernelFunction("WhiteNoise", hyperparams={"variance": variance})
+    
+    def constant(self, variance=1.0):
+        return KernelFunction("Constant", hyperparams={"variance": variance})
 
     def add(self, other):
+        if self.name is None:
+            return other
+        elif other.name is None:
+            return self
         return KernelFunction("Sum", children=[self, other])
 
     def multiply(self, other):
+        if self.name is None:
+            return other
+        elif other.name is None:
+            return self
         return KernelFunction("Product", children=[self, other])
-
+    
     def evaluate(self, input_dim):
         if self.name == "RBF":
             return GPy.kern.RBF(input_dim, **self.hyperparams)
@@ -56,6 +70,10 @@ class KernelFunction:
             return kernel
         elif self.name == "RQ":
             return GPy.kern.RatQuad(input_dim, **self.hyperparams)
+        elif self.name == "WhiteNoise":
+            return GPy.kern.White(input_dim, **self.hyperparams)
+        elif self.name == "Constant":
+            return GPy.kern.Bias(input_dim, **self.hyperparams)
         elif self.name == "Sum":
             result = self.children[0].evaluate(input_dim)
             for child in self.children[1:]:
@@ -66,11 +84,10 @@ class KernelFunction:
             for child in self.children[1:]:
                 result *= child.evaluate(input_dim)
             return result
-        elif self.name == "Identity":
-            return GPy.kern.Bias(input_dim, variance=1e-6)
+        elif self.name == None:
+            raise ValueError("Cannot evaluate empty kernel, perform operation")
         else:
             raise ValueError(f"Unknown kernel type: {self.name}")
-
 
     def __str__(self):
         if self.name in ["Sum", "Product"]:
@@ -78,7 +95,6 @@ class KernelFunction:
             return f"({sep.join(str(c) for c in self.children)})"
         else:
             return f"{self.name}({self.hyperparams})"
-
 
 
 def generate_gp_data(kernel_fn: KernelFunction, input_dim=1, n_points=50, noise_var=0.1):
