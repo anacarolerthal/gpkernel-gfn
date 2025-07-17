@@ -71,12 +71,14 @@ class KernelFunction:
         else:
             raise ValueError(f"Unknown kernel type: {self.name}")
 
+
     def __str__(self):
         if self.name in ["Sum", "Product"]:
             sep = " + " if self.name == "Sum" else " * "
             return f"({sep.join(str(c) for c in self.children)})"
         else:
             return f"{self.name}({self.hyperparams})"
+
 
 
 def generate_gp_data(kernel_fn: KernelFunction, input_dim=1, n_points=50, noise_var=0.1):
@@ -98,13 +100,13 @@ def generate_gp_data(kernel_fn: KernelFunction, input_dim=1, n_points=50, noise_
     kernel = kernel_fn.evaluate(input_dim=input_dim)
 
     # Build GP prior model (no fitting, just sampling)
-    gp = GPy.models.GPRegression(X, np.zeros((n_points, 1)), kernel)
+    gp = GPy.models.GPRegression(X, np.zeros((n_points, 1)), kernel, normalizer=False)
     Y = gp.posterior_samples_f(X, full_cov=True, size=1).reshape(-1, 1) # sampling from the prior
     Y += np.random.normal(0, np.sqrt(noise_var), size=Y.shape) # adding noise to the samples
     return X, Y, str(kernel_fn)
 
 
-def evaluate_likelihood(kernel_fn: KernelFunction, X, Y):
+def evaluate_likelihood(kernel_fn: KernelFunction, X, Y, runtime=True):
     """
     Fits a GP model with the given kernel to the provided data and returns the log marginal likelihood
     
@@ -118,16 +120,18 @@ def evaluate_likelihood(kernel_fn: KernelFunction, X, Y):
     """
     key = str(kernel_fn)
 
-    if key in _likelihood_cache:
+    if key in _likelihood_cache and runtime:
         return _likelihood_cache[key]
 
     input_dim = X.shape[1]
     kernel = kernel_fn.evaluate(input_dim=input_dim)
     model = GPy.models.GPRegression(X, Y, kernel, normalizer=False)
-    model.optimize(max_iters=10, messages=False)
+    model.optimize(max_iters=5, messages=False)
 
     ll = model.log_likelihood()
     _likelihood_cache[key] = ll
+
+
     return ll
 
 class Environment(metaclass=ABCMeta):
@@ -256,6 +260,27 @@ class KernelEnvironment(Environment):
             # The 'end' action is only allowed if the kernel is not in its initial state
             if self.is_initial[i]:
                 self.mask[i, self.end_action_id] = False
+
+    def featurize_state(self):
+        """
+        Converts the current state of each kernel into a feature vector.
+        Returns:
+            torch.Tensor: Feature vector of shape (batch_size, max_trajectory_length)
+        """
+        max_length = self.max_trajectory_length
+        # Initialize with shape (batch_size, max_length)
+        features = torch.zeros((self.batch_size, max_length), dtype=torch.float)
+
+        for i in range(self.batch_size):
+            # Fill the feature vector with action IDs from history
+            for j, action_id in enumerate(self.history[i]):
+                if j < max_length:
+                    # Update the correct index
+                    features[i, j] = action_id + 1  # +1 to avoid zero index
+
+        # The shape is now (batch_size, max_trajectory_length), which is correct
+        return features
+
 
 
 def plot_kernel_function(kernel_fn, x_range=(0, 10), num_points=100, num_samples=5, 
