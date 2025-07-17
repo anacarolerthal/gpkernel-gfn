@@ -528,11 +528,13 @@ def compute_partition_function_l1(env, max_len, X, Y):
         float: partition function Z
     """
     Z = 0.0
+    evaluations = 0  # Track number of evaluations
     base_kernels = list(env.kernel_creators.values())
     ops = ['add', 'multiply']
 
     def recurse(kernel, depth):
         nonlocal Z
+        nonlocal evaluations
         if depth == max_len:
             return
 
@@ -543,6 +545,7 @@ def compute_partition_function_l1(env, max_len, X, Y):
                 elif op == "multiply":
                     new_kernel = kernel.multiply(create())
                 ll = evaluate_likelihood(new_kernel, X, Y, runtime=True)
+                evaluations += 1
                 Z += np.exp(ll)
                 recurse(new_kernel, depth + 1)
 
@@ -550,6 +553,7 @@ def compute_partition_function_l1(env, max_len, X, Y):
     for create in base_kernels:
         kernel = create()
         ll = evaluate_likelihood(kernel, X, Y, runtime=True)
+        evaluations += 1
         Z += np.exp(ll)
-        recurse(kernel, 1)
-    return Z
+        recurse(kernel, 1)  
+    return Z, evaluations
