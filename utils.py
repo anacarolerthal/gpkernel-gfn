@@ -104,7 +104,7 @@ class KernelFunction:
             return f"{self.name}({self.hyperparams})"
 
 
-def generate_gp_data(kernel_fn: KernelFunction, input_dim=1, n_points=50, noise_var=0.1):
+def generate_gp_data(kernel_fn: KernelFunction, input_dim=1, n_points=50, noise_var=0.01):
     """
     Generates synthetic data from a Gaussian Process prior with the specified kernel function for evaluation
     
@@ -317,8 +317,7 @@ def plot_kernel_function(kernel_fn, x_range=(0, 10), num_points=100, num_samples
     """
     Visualize a kernel function by plotting samples from its GP prior and covariance.
     
-    Parameters:
-    -----------
+    Args:
     kernel_fn : KernelFunction
         The kernel function to visualize
     x_range : tuple
@@ -411,8 +410,7 @@ def compare_kernels(*kernel_fns, x_range=(0, 10), num_points=100, num_samples=3,
     """
     Compare multiple kernel functions side by side.
     
-    Parameters:
-    -----------
+    Args:
     *kernel_fns : KernelFunction objects
         Variable number of kernel functions to compare
     x_range : tuple
@@ -586,3 +584,46 @@ class BackwardPolicy:
         
 
         return None, log_probs
+def compute_partition_function_l1(env, max_len, X, Y):
+    """
+    Computes the L1 partition function over all terminal kernel compositions up to max_len.
+    
+    Args:
+        env: instance of KernelEnvironment
+        max_len: max kernel compositions
+        X: input data
+        Y: target data
+
+    Returns:
+        float: partition function Z
+    """
+    Z = 0.0
+    evaluations = 0  # Track number of evaluations
+    base_kernels = list(env.kernel_creators.values())
+    ops = ['add', 'multiply']
+
+    def recurse(kernel, depth):
+        nonlocal Z
+        nonlocal evaluations
+        if depth == max_len:
+            return
+
+        for op in ops:
+            for create in base_kernels:
+                if op == "add":
+                    new_kernel = kernel.add(create())
+                elif op == "multiply":
+                    new_kernel = kernel.multiply(create())
+                ll = evaluate_likelihood(new_kernel, X, Y, runtime=True)
+                evaluations += 1
+                Z += np.exp(ll)
+                recurse(new_kernel, depth + 1)
+
+    # try all base kernels as starting points
+    for create in base_kernels:
+        kernel = create()
+        ll = evaluate_likelihood(kernel, X, Y, runtime=True)
+        evaluations += 1
+        Z += np.exp(ll)
+        recurse(kernel, 1)  
+    return Z, evaluations
