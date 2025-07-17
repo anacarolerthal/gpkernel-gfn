@@ -469,3 +469,43 @@ def compare_kernels(*kernel_fns, x_range=(0, 10), num_points=100, num_samples=3,
     
     plt.tight_layout()
     plt.show()
+
+def train(gflownet, create_env, epochs, batch_size, lr=1e-3, 
+            min_eps=1e-2, clamp_g=None, use_scheduler=True):
+    optimizer = torch.optim.AdamW(gflownet.parameters(), lr=lr)
+    if gflownet.criterion == 'tb': 
+        optimizer = torch.optim.AdamW([
+            {'params': chain(gflownet.forward_flow.parameters()), 'lr': lr}, 
+            {'params': gflownet.log_partition_function, 'lr': lr * 1e3} 
+        ]) 
+
+    if use_scheduler: 
+        scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, total_iters=epochs, power=1.0)
+
+    initial_eps = gflownet.forward_flow.epsilon 
+    eps_schedule = 2 * (initial_eps - min_eps) / epochs
+
+    losses = list() 
+    pbar = tqdm.tqdm(range(epochs), disable=False) 
+    for epoch in pbar: 
+        # if (epoch > epochs // 3): 
+        #     gflownet.backward_flow.requires_grad_(False) 
+    
+        optimizer.zero_grad() 
+        env = create_env(batch_size=batch_size) 
+        loss = gflownet(env) 
+        loss.backward() 
+
+        if clamp_g is not None: 
+            for p in gflownet.parameters(): 
+                if p.grad is not None: 
+                    p.grad.div_(max(1, torch.norm(p.grad) / clamp_g)) 
+    
+        optimizer.step() 
+        pbar.set_postfix(loss=loss.item()) 
+        # Update the exploration rate 
+        gflownet.forward_flow.epsilon = max(min_eps, gflownet.forward_flow.epsilon - eps_schedule * epoch) 
+        if use_scheduler: scheduler.step() 
+        losses.append(loss.item()) 
+
+    return gflownet, losses  
