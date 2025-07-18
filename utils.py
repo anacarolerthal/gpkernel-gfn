@@ -152,7 +152,7 @@ def evaluate_likelihood(kernel_fn: KernelFunction, X, Y, runtime=True):
     input_dim = X.shape[1]
     kernel = kernel_fn.evaluate(input_dim=input_dim)
     model = GPy.models.GPRegression(X, Y, kernel, normalizer=False)
-    model.optimize(max_iters=5, messages=False)
+    model.optimize(max_iters=100, messages=False)
 
     ll = model.log_likelihood()
     _likelihood_cache[key] = ll
@@ -529,11 +529,11 @@ class ForwardPolicy(nn.Module):
     def __init__(self, input_dim, output_dim,epsilon=0.1):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 128),
+            nn.Linear(input_dim, 16),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(16, 16),
             nn.ReLU(),
-            nn.Linear(64, output_dim + 1) # +1 for the state flow log F(s)
+            nn.Linear(16, output_dim + 1) # +1 for the state flow log F(s)
         )
 
         self.epsilon = epsilon  # Exploration rate for epsilon-greedy sampling
@@ -571,6 +571,38 @@ class ForwardPolicy(nn.Module):
             
         return actions, log_probs.squeeze(), state_flow.squeeze()
 
+    def forward_prob(self, batch_state, actions=None):
+        
+        
+        features = batch_state.featurize_state()
+        policy = self.net(features)
+
+        epsilon = 0. if not self.training else self.epsilon
+        #print(epsilon)
+        unif_policy = torch.ones_like(policy) / policy.size(1)
+
+        output = policy * (1 - epsilon) + epsilon * unif_policy
+        
+        logits, state_flow = output[:, :-1], output[:, -1]
+        
+        # Apply the environment's mask
+        logits[~batch_state.mask] = -torch.inf
+        
+        # Find rows where all actions were masked (all logits are -inf)
+        all_masked_rows = torch.all(torch.isneginf(logits), dim=1)
+        # For those rows, set the first logit to 0.0 to prevent invalid dist
+        # This allows sampling an action that will be ignored 
+        if all_masked_rows.any():
+            logits[all_masked_rows, 0] = 0.0
+
+        if actions is None:
+            dist = Categorical(logits=logits)
+            actions = dist.sample()
+            log_probs = dist.log_prob(actions)
+        else:
+            log_probs = Categorical(logits=logits).log_prob(actions)
+            
+        return logits
 
 
 class BackwardPolicy:
@@ -581,9 +613,9 @@ class BackwardPolicy:
     def __call__(self, batch_state, actions):
         batch_size = batch_state.batch_size
         log_probs = torch.zeros(batch_size)
-        
 
         return None, log_probs
+    
 def compute_partition_function_l1(env, max_len, X, Y):
     """
     Computes the L1 partition function over all terminal kernel compositions up to max_len.
@@ -598,14 +630,13 @@ def compute_partition_function_l1(env, max_len, X, Y):
         float: partition function Z
     """
     Z = 0.0
-    evaluations = 0  # Track number of evaluations
+
     base_kernels = list(env.kernel_creators.values())
     ops = ['add', 'multiply']
 
     def recurse(kernel, depth):
         nonlocal Z
-        nonlocal evaluations
-        if depth == max_len:
+        if depth ==  max_len:
             return
 
         for op in ops:
@@ -614,16 +645,41 @@ def compute_partition_function_l1(env, max_len, X, Y):
                     new_kernel = kernel.add(create())
                 elif op == "multiply":
                     new_kernel = kernel.multiply(create())
-                ll = evaluate_likelihood(new_kernel, X, Y, runtime=True)
-                evaluations += 1
-                Z += np.exp(ll)
+                env.state = [new_kernel]
+                ll = log_likelihood_reward(X, Y, env)
+                Z += 1 / np.log(1 + np.exp(-0.05 * (ll))) 
+                
                 recurse(new_kernel, depth + 1)
 
     # try all base kernels as starting points
     for create in base_kernels:
         kernel = create()
-        ll = evaluate_likelihood(kernel, X, Y, runtime=True)
-        evaluations += 1
-        Z += np.exp(ll)
+        env.state = [kernel]
+        ll = log_likelihood_reward(X, Y, env)
+        Z += 1 / np.log(1 + np.exp(-0.05 * (ll))) 
+        print(F"Kernel: {kernel}, Log Likelihood: {ll}, Z: {Z}")
         recurse(kernel, 1)  
-    return Z, evaluations
+    return Z
+
+
+def log_likelihood_reward(X, Y, env: 'KernelEnvironment'):
+    """
+    Computes the log marginal likelihood of each kernel in the environment
+    given the data (X, Y).
+    """
+    rewards = []
+    features = env.featurize_state()
+    for i,k in enumerate(env.state): 
+        log_likelihood = evaluate_likelihood(k, X, Y)
+        #print(np.log(1 + np.exp(-0.5 * (log_likelihood - 5))))
+
+        state_vector = features[i]
+        non_zero_count = torch.count_nonzero(state_vector)
+
+        reward = 1 / np.log(1 + np.exp(-0.05 * (log_likelihood))) 
+
+
+
+        rewards.append(reward if log_likelihood is not None else 1e-10)
+        #rewards.append(log_likelihood**(3/2) if log_likelihood is not None else 1e-10)
+    return torch.tensor(rewards, dtype=torch.float32) 
