@@ -11,7 +11,7 @@ from functools import partial
 from utils import KernelFunction, KernelEnvironment, log_likelihood_reward
 from utils import plot_kernel_function, compare_kernels
 from gflownet import GFlowNet 
-
+import random
 @torch.no_grad()
 def calculate_l1_distance(forward_policy, env_class: KernelEnvironment, max_len: int, X, Y):
     """
@@ -115,3 +115,65 @@ def calculate_l1_distance(forward_policy, env_class: KernelEnvironment, max_len:
     l1_distance = np.sum(np.abs(target_dist - policy_dist))
     
     return l1_distance
+
+
+def randomize_hyperparameters(kernel: KernelFunction):
+    """
+    Recursively traverses a KernelFunction object and randomly modifies the
+    hyperparameters of its base components in a reasonable range.
+    
+    Args:
+        kernel (KernelFunction): The kernel object to modify in-place.
+    """
+    # Base case: If this is a base kernel (like RBF, Linear), modify its params.
+    # A base kernel has no children.
+    if not kernel.children:
+        if kernel.hyperparams:
+            print(f"  -> Randomizing '{kernel.name}' params...")
+            for param, value in kernel.hyperparams.items():
+                # Define a scaling factor to adjust the parameter.
+                # e.g., random.uniform(0.5, 1.5) will change the value
+                # by -50% to +50% of its original value.
+                scale_factor = random.uniform(0.5, 1.5)
+                new_value = value * scale_factor
+                
+                # Update the hyperparameter in the dictionary, rounding for neatness
+                kernel.hyperparams[param] = round(new_value, 3)
+
+    # Recursive step: If this is a composite kernel (Sum, Product),
+    # call this function on each of its children.
+    else:
+        for child in kernel.children:
+            randomize_hyperparameters(child)
+
+def create_random_kernel():
+    """
+    Creates a random kernel function.
+    """
+    # Create a series of actions from a uniform distribution
+    env = KernelEnvironment(
+        batch_size=1,
+        max_trajectory_length=4,
+        log_reward=log_likelihood_reward
+    )
+    n = env.action_space_size  
+    logits = torch.ones(n) 
+   
+
+    for i in range(4):
+        if i == 0:
+            #prevent the first action from being a stop (-1)
+            logits[-1] = -torch.inf
+            dist = Categorical(logits=logits)
+            actions = dist.sample((1,))  # Creates a 1D tensor of shape [1]
+        else:
+            logits[-1] = 1
+            dist = Categorical(logits=logits)
+            actions = dist.sample((1,)) # Creates a 1D tensor of shape [1]
+
+        env.apply(actions)
+    
+    KFn = env.state[0]
+    randomize_hyperparameters(KFn)
+    
+    return KFn
