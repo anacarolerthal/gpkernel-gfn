@@ -1,8 +1,7 @@
 from utils import KernelFunction, evaluate_likelihood, generate_gp_data
 import numpy as np
 
-
-def greedy_statistician_search(X, Y, method='BIC', max_steps=10):
+def greedy_search(X, Y, method='BIC', max_steps=10):
     """
     Greedily constructs a composite kernel by maximizing GP marginal likelihood using sum, product
     or replacement of base kernels.
@@ -34,11 +33,6 @@ def greedy_statistician_search(X, Y, method='BIC', max_steps=10):
         return ll
     
     def get_BIC(kf):
-        """
-        Calculate Bayesian Information Criterion (BIC) for a given kernel function.
-        BIC = -2 * log_likelihood + k * log(n)
-        where k is the number of parameters and n is the number of data points.
-        """
         n = len(Y)
         k = kf.num_params() +1 
         ll = get_ll(kf)
@@ -73,7 +67,6 @@ def greedy_statistician_search(X, Y, method='BIC', max_steps=10):
         if current_kernel is None:
             candidates = base_kernels
         else:
-
             candidates.extend(expand_subtrees(current_kernel))
             
         if method == 'BIC':
@@ -93,7 +86,7 @@ def greedy_statistician_search(X, Y, method='BIC', max_steps=10):
         elif method == 'LL':
             best_ll = -np.inf
             scored = [(get_ll(c), c) for c in candidates]
-            scored = [x for x in scored if np.isfinite(x[0])]
+            scored = [x for x in scored]
             best_candidate_ll, best_candidate = max(scored, key=lambda x: x[0])
             print(f"[Step {step+1}] LL: {best_candidate_ll:.2f} BIC: {get_BIC(best_candidate):.2f} | {best_candidate}")
             if best_candidate_ll > best_ll:
@@ -104,4 +97,4 @@ def greedy_statistician_search(X, Y, method='BIC', max_steps=10):
                 break
         else:
             raise ValueError("Method must be either 'BIC' or 'LL'.")
-    return current_kernel
+    return current_kernel, _likelihood_cache
