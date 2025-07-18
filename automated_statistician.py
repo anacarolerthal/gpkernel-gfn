@@ -19,7 +19,6 @@ def greedy_search(X, Y, method='BIC', max_steps=10):
         KernelFunction().rbf(),
         KernelFunction().linear(),
         KernelFunction().periodic(),
-        KernelFunction().white_noise(),
         KernelFunction().constant(),
     ]
     _likelihood_cache = {} # cache
@@ -34,7 +33,7 @@ def greedy_search(X, Y, method='BIC', max_steps=10):
     
     def get_BIC(kf):
         n = len(Y)
-        k = kf.num_params() +1 
+        k = kf.num_params()+1 
         ll = get_ll(kf)
         return -2 * ll + k * np.log(n)
 

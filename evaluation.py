@@ -177,3 +177,23 @@ def create_random_kernel():
     randomize_hyperparameters(KFn)
     
     return KFn
+
+def calculate_rmse(kernel, X, Y, X_test, Y_test):
+    """
+    Computes the RMSE between the GP with the given kernel and the true test data
+    Args:
+        kernel (KernelFunction): The kernel function to evaluate.
+        X (torch.Tensor): Training input data.
+        Y (torch.Tensor): Training output data.
+        X_test (torch.Tensor): Test input data.
+        Y_test (torch.Tensor): Test output data.
+    Returns:
+        float: The RMSE value.
+    """
+    #X, Y, X_test, Y_test = X.numpy(), Y.numpy(), X_test.numpy(), Y_test.numpy()
+    kernel = kernel.evaluate(X.shape[1])
+    gp_model = GPy.models.GPRegression(X, Y, kernel)
+    Y_pred, _ = gp_model.predict(X_test)
+    
+    rmse = np.sqrt(np.mean((Y_pred.flatten() - Y_test.flatten())**2))
+    return rmse

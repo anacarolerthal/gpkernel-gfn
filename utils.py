@@ -142,15 +142,11 @@ def evaluate_likelihood(kernel_fn: KernelFunction, X, Y, runtime=True):
         float: Log marginal likelihood of the GP with this kernel on the data.
     """
     key = str(kernel_fn)
-    
-
 
     if key in _likelihood_cache and runtime:
         return _likelihood_cache[key]
 
-
-    input_dim = X.shape[1]
-    kernel = kernel_fn.evaluate(input_dim=input_dim)
+    kernel = kernel_fn.evaluate(input_dim=X.shape[1])
     model = GPy.models.GPRegression(X, Y, kernel, normalizer=False)
     model.optimize(max_iters=100, messages=False)
 
